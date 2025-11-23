@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pong Wars - Chaos Edition</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #e0e0e0;
+        }
+        canvas {
+            display: block;
+        }
+        #ui-layer {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        #score-board {
+            font-size: 24px;
+            font-weight: bold;
+            opacity: 0.9;
+            background: rgba(255,255,255,0.5);
+            padding: 5px 15px;
+            border-radius: 10px;
+        }
+        .legend {
+            font-size: 12px;
+            display: flex;
+            gap: 15px;
+            background: rgba(255,255,255,0.8);
+            padding: 5px;
+            border-radius: 5px;
+        }
+        .p-item { display: flex; align-items: center; gap: 4px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div id="score-board">day 50% | night 50%</div>
+        <div class="legend">
+            <div class="p-item"><span class="dot" style="background:#FFD700"></span> x2 Balle</div>
+            <div class="p-item"><span class="dot" style="background:#00FF00"></span> Vitesse+</div>
+            <div class="p-item"><span class="dot" style="background:#FF0000"></span> Ennemi Lent</div>
+        </div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+    // --- CONFIGURATION ---
+    const colorDay = "#e6e6e6";   
+    const colorNight = "#1a2b30"; 
+    const baseSize = 15;
+    const giantSize = 40; // Taille quand on gagne > 80%
+    const baseSpeed = 6;
+    const blockCount = 20; 
+    
+    // Power Up Config
+    const POWERUP_SIZE = 12;
+    const SPAWN_RATE = 300; // Frames entre chaque spawn (~5 secondes)
+    let frameCount = 0;
+
+    // --- CLASSES ---
+    class Ball {
+        constructor(x, y, vx, vy, type) {
+            this.x = x;
+            this.y = y;
+            this.vx = vx;
+            this.vy = vy;
+            this.type = type; // 'day' (balle claire) ou 'night' (balle foncée)
+            this.speedMult = 1.0; // Multiplicateur de vitesse perso
+        }
+    }
+
+    class PowerUp {
+        constructor(x, y, type) {
+            this.x = x;
+            this.y = y;
+            this.type = type; // 0: Multiball, 1: SpeedUp, 2: SlowEnemy
+            this.active = true;
+        }
+    }
+
+    // --- VARIABLES GLOBALES ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreDiv = document.getElementById('score-board');
+
+    let width, height, blockHeight;
+    let splitLine = []; 
+    
+    // Listes d'objets
+    let dayBalls = [];
+    let nightBalls = [];
+    let powerUps = [];
+
+    // Stats de jeu
+    let dayPercent = 50;
+
+    // --- INITIALISATION ---
+    function init() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+        blockHeight = height / blockCount;
+
+        // Reset ligne
+        splitLine = [];
+        for (let i = 0; i < blockCount; i++) splitLine.push(width / 2);
+
+        // Reset balles
+        dayBalls = [new Ball((width/4)*3, height/2, -baseSpeed, -baseSpeed, 'day')];
+        nightBalls = [new Ball(width/4, height/2, baseSpeed, baseSpeed, 'night')];
+        
+        powerUps = [];
+    }
+
+    // --- SPAWN POWER UP ---
+    function spawnPowerUp() {
+        const x = Math.random() * (width - 100) + 50;
+        const y = Math.random() * (height - 100) + 50;
+        const type = Math.floor(Math.random() * 3); // 0, 1 ou 2
+        powerUps.push(new PowerUp(x, y, type));
+    }
+
+    // --- LOGIQUE PHYSIQUE ---
+    function updateBall(ball, index, array, opponentArray) {
+        // Gestion de la taille (Grossit si son équipe domine > 80%)
+        let currentSize = baseSize;
+        if (ball.type === 'day' && dayPercent > 80) currentSize = giantSize;
+        if (ball.type === 'night' && (100 - dayPercent) > 80) currentSize = giantSize;
+
+        // Déplacement
+        ball.x += ball.vx * ball.speedMult;
+        ball.y += ball.vy * ball.speedMult;
+
+        // Murs Haut/Bas
+        if (ball.y - currentSize < 0) {
+            ball.y = currentSize;
+            ball.vy *= -1;
+        } else if (ball.y + currentSize > height) {
+            ball.y = height - currentSize;
+            ball.vy *= -1;
+        }
+
+        // Murs Gauche/Droite
+        if (ball.x - currentSize < 0) {
+            ball.x = currentSize;
+            ball.vx *= -1;
+        } else if (ball.x + currentSize > width) {
+            ball.x = width - currentSize;
+            ball.vx *= -1;
+        }
+
+        // Collision avec la LIGNE de territoire
+        let rowIndex = Math.floor(ball.y / blockHeight);
+        rowIndex = Math.max(0, Math.min(rowIndex, blockCount - 1));
+        let lineX = splitLine[rowIndex];
+
+        // Puissance de poussée (plus forte si géant)
+        let pushStrength = (currentSize === giantSize) ? 120 : 40;
+
+        if (ball.type === 'night') {
+            // Balle Nuit (Foncée) vient de gauche -> tape vers droite
+            if (ball.x + currentSize >= lineX) {
+                ball.vx *= -1;
+                ball.x = lineX - currentSize; 
+                splitLine[rowIndex] += pushStrength; // Gagne du terrain
+            }
+        } else {
+            // Balle Jour (Claire) vient de droite -> tape vers gauche
+            if (ball.x - currentSize <= lineX) {
+                ball.vx *= -1;
+                ball.x = lineX + currentSize; 
+                splitLine[rowIndex] -= pushStrength; // Gagne du terrain
+            }
+        }
+
+        // Collision avec POWER UPS
+        for (let i = powerUps.length - 1; i >= 0; i--) {
+            let p = powerUps[i];
+            let dx = ball.x - p.x;
+            let dy = ball.y - p.y;
+            let dist = Math.sqrt(dx*dx + dy*dy);
+
+            if (dist < currentSize + POWERUP_SIZE) {
+                applyPowerUp(p.type, ball, array, opponentArray);
+                powerUps.splice(i, 1); // Retirer le powerup
+            }
+        }
+    }
+
+    function applyPowerUp(type, ball, myArray, enemyArray) {
+        // 0: Multiball, 1: SpeedUp, 2: SlowEnemy
+        
+        if (type === 0) { // MULTIBALL (Double la boule)
+            // Créer une copie avec une direction légèrement différente
+            let newVx = -ball.vx;
+            let newVy = ball.vy; 
+            let newBall = new Ball(ball.x, ball.y, newVx, newVy, ball.type);
+            newBall.speedMult = ball.speedMult; // Hérite de la vitesse actuelle
+            myArray.push(newBall);
+        } 
+        else if (type === 1) { // SPEED UP (Accélère ma balle)
+            ball.speedMult *= 1.5;
+            // Cap la vitesse max pour éviter les bugs
+            if(ball.speedMult > 4) ball.speedMult = 4;
+        } 
+        else if (type === 2) { // SLOW ENEMY (Ralentit TOUS les ennemis)
+            enemyArray.forEach(enemy => {
+                enemy.speedMult *= 0.5;
+                if(enemy.speedMult < 0.2) enemy.speedMult = 0.2; // Vitesse min
+            });
+        }
+    }
+
+    function calculateScore() {
+        let totalWidth = width * blockCount;
+        let dayAreaPixels = 0;
+        for(let w of splitLine) {
+            dayAreaPixels += w;
+        }
+        
+        // Calcul du pourcentage
+        // Note: splitLine est la coord X. 0 à X c'est NUIT (car fond est Jour).
+        // Attends, ma logique de dessin :
+        // Fond = Jour (Blanc). On dessine Nuit (Noir) de X à Width.
+        // Donc splitLine = début de la zone Nuit.
+        // Donc 0 à splitLine = Zone Jour.
+        
+        dayPercent = Math.round((dayAreaPixels / totalWidth) * 100);
+        let nightPercent = 100 - dayPercent;
+
+        scoreDiv.innerText = `day ${dayPercent}% | night ${nightPercent}%`;
+        
+        // Couleur du texte
+        scoreDiv.style.color = (dayPercent > 50) ? colorNight : "#555";
+    }
+
+    // --- DESSIN ---
+    function draw() {
+        // 1. Fond (Jour)
+        ctx.fillStyle = colorDay;
+        ctx.fillRect(0, 0, width, height);
+
+        // 2. Zone Nuit
+        ctx.fillStyle = colorNight;
+        for (let i = 0; i < blockCount; i++) {
+            let ly = i * blockHeight;
+            let lx = splitLine[i];
+            ctx.fillRect(lx, ly, width - lx, blockHeight + 1); // +1 pour éviter les lignes blanches fines
+        }
+
+        // 3. PowerUps
+        powerUps.forEach(p => {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, POWERUP_SIZE, 0, Math.PI * 2);
+            if(p.type === 0) ctx.fillStyle = "#FFD700"; // Or (x2)
+            if(p.type === 1) ctx.fillStyle = "#00FF00"; // Vert (Speed)
+            if(p.type === 2) ctx.fillStyle = "#FF0000"; // Rouge (Slow)
+            ctx.fill();
+            ctx.strokeStyle = "white";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // Texte icone
+            ctx.fillStyle = "black";
+            ctx.font = "bold 12px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            let label = p.type === 0 ? "x2" : (p.type === 1 ? ">>" : "SL");
+            ctx.fillText(label, p.x, p.y);
+        });
+
+        // 4. Balles
+        // Balles Nuit (Sont physiquement à gauche au début, couleur foncée)
+        ctx.fillStyle = colorNight;
+        nightBalls.forEach(b => {
+            let r = (100 - dayPercent > 80) ? giantSize : baseSize;
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // Balles Jour (Physiquement à droite, couleur claire)
+        ctx.fillStyle = colorDay;
+        dayBalls.forEach(b => {
+            let r = (dayPercent > 80) ? giantSize : baseSize;
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    }
+
+    // --- BOUCLE ---
+    function loop() {
+        // Gestion du spawn de PowerUp
+        frameCount++;
+        if (frameCount > SPAWN_RATE) {
+            spawnPowerUp();
+            frameCount = 0;
+        }
+
+        // Update Night Balls
+        nightBalls.forEach(b => updateBall(b, 0, nightBalls, dayBalls));
+        // Update Day Balls
+        dayBalls.forEach(b => updateBall(b, 0, dayBalls, nightBalls));
+
+        calculateScore();
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('resize', init);
+    init();
+    loop();
+
+</script>
+</body>
+</html>
